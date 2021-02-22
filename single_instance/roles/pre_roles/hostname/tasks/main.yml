@@ -1,0 +1,6 @@
+---
+# tasks file for hostname
+
+- import_tasks: common.yml
+  tags:
+    - pr_r_hostname_t_set_hostname

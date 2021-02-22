@@ -1,0 +1,14 @@
+---
+# defaults file for response_files
+
+oracle_edition: EE
+
+enable_cdb: true
+oracle_pdb: PDB1
+
+oracle_pwd: oracle
+
+oracle_characterset: AL32UTF8
+
+mem_total_mb: "{{ ansible_facts['memtotal_mb'] }}"
+_4_GB_TO_MB: 4096

@@ -1,0 +1,84 @@
+Signed-by : Vasundhara V <vasundhara.venkatasubramanian@oracle.com>
+Reviewed-by : Sangeeta Dhundale <sangeeta.dhundale@oracle.com>
+
+---
+diff -Nrup oracle-database-server-12cR2-preinstall-1.0.old1/oracle-database-server-12cR2-preinstall-firstboot oracle-database-server-12cR2-preinstall-1.0/oracle-database-server-12cR2-preinstall-firstboot
+--- oracle-database-server-12cR2-preinstall-1.0.old1/oracle-database-server-12cR2-preinstall-firstboot	2018-08-02 11:01:09.520000000 +0530
++++ oracle-database-server-12cR2-preinstall-1.0/oracle-database-server-12cR2-preinstall-firstboot	2018-08-02 11:51:24.556000000 +0530
+@@ -3,7 +3,7 @@
+ # firstboot: Invokes the oracle-database-server-12cR2-preinstall-firstboot checkboot 
+ #            function if it hasn't been run before
+ #
+-# Copyright (C) 2014 Oracle. All rights reserved.
++# Copyright (C) 2018 Oracle. All rights reserved.
+ #
+ # chkconfig: 2345 99 95 
+ #
+@@ -14,7 +14,7 @@
+ 
+ # Check for root
+ [ `id -u` = 0 ] || exit 4
+-PREINFILE=`basename $0 | sed -e 's/preinstall.*$/preinstall/g'`
++PREINFILE=oracle-database-server-12cR2-preinstall
+ FILENAME=/etc/sysconfig/${PREINFILE}/${PREINFILE}.conf;
+ PRE_PARAM_LOG=/var/log/${PREINFILE}/results/orakernel.log;
+ RUN_PREINSTALL_EXPR=`echo $PREINFILE | sed -e 's/-/_/g' -e 's/\(.*\)/\U\1/'`
+diff -Nrup oracle-database-server-12cR2-preinstall-1.0.old1/oracle-database-server-12cR2-preinstall-verify oracle-database-server-12cR2-preinstall-1.0/oracle-database-server-12cR2-preinstall-verify
+--- oracle-database-server-12cR2-preinstall-1.0.old1/oracle-database-server-12cR2-preinstall-verify	2018-08-02 11:01:09.520000000 +0530
++++ oracle-database-server-12cR2-preinstall-1.0/oracle-database-server-12cR2-preinstall-verify	2018-08-02 11:49:06.787000000 +0530
+@@ -1,7 +1,7 @@
+ #!/bin/bash
+ ##########################################################
+ #
+-#  Copyright (c) 2014, Oracle. All rights reserved
++#  Copyright (c) 2018, Oracle. All rights reserved
+ #
+ #  This program is free software; you can redistribute it and/or modify
+ #  it under the terms of the GNU General Public License as published by
+@@ -1024,7 +1024,7 @@ f_uninstallsysctl ()
+   # Check whether backup file exists for sysctl.conf
+   # if  ${PARAMS} present remove older settings
+ 
+-  # Check if /etc/sysctl.d/99-<any-previous-timestamp>-oracle-rdbms-server-<version>-preinstall.conf is present
++  # Check if /etc/sysctl.d/99-<any-previous-timestamp>-oracle-*preinstall*.conf is present
+   l_sysctlbackup=`ls /etc/sysctl.d/99-${PREINFILE}-sysctl.conf | awk -F"/" '{print $NF}'`
+   l_lastsaved=`ls -t /etc/sysctl.d/*preinstall* | awk -F"/" '{print $NF}' | head -1`
+ 
+@@ -1151,8 +1151,8 @@ f_uninstallsysctl ()
+ f_reinstateinitialvalues ()
+ {
+   f_lock;
+-  ${SED} '/^\s*$/d' ${SYSCTL_INIT_BACKUP} > ${SYSCTL_INIT_BACKUP}.noblank
+-  ${SED} '/^\s*$/d' ${SYSCTL} > ${SYSCTL}.noblank
++  ${SED} -e '/^[[:blank:]]*$/d' -e '/^[[:blank:]]*#/d' ${SYSCTL_INIT_BACKUP} | sort  > ${SYSCTL_INIT_BACKUP}.noblank
++  ${SED} -e '/^[[:blank:]]*$/d' -e '/^[[:blank:]]*#/d' ${SYSCTL} | sort  > ${SYSCTL}.noblank
+   diff ${SYSCTL_INIT_BACKUP}.noblank ${SYSCTL}.noblank | grep "^>" | sed -e 's/> //g' > ${SYSCTL}.diff
+   mv ${SYSCTL_INIT_BACKUP} ${SYSCTL}
+   cat ${SYSCTL}.diff >> ${SYSCTL}
+@@ -1174,7 +1174,7 @@ f_uninstallgrub ()
+   f_lock;
+ 
+   l_grubbackup=`ls ${CHANGE_FILE}-${PREINFILE}.orabackup 2>/dev/null | awk -F"/" '{print $NF}' 2>/dev/null`
+-  l_lastsaved=`ls -t ${CHANGE_FILE}*preinstall.orabackup 2>/dev/null | awk -F"/" '{print $NF}' | head -1 2>/dev/null`
++  l_lastsaved=`ls -t ${CHANGE_FILE}*preinstall*.orabackup 2>/dev/null | awk -F"/" '{print $NF}' | head -1 2>/dev/null`
+ 
+   if [ "x$l_grubbackup" == "x" ]; then
+      echo "Error - Unable to find the previous backup...${CHANGE_FILE}-${PREINFILE}.orabackup.   Exiting..." >> ${PRE_PARAM_LOG}
+@@ -1186,7 +1186,7 @@ f_uninstallgrub ()
+   # If this timestamp is not the last, nothing to be done
+   # If this is the last saved backup, 
+   # Then, remove the grub entries from CHANGE_FILE
+-  # If there is any other oracle-*-server-*-preinstall.orabackup - call the most recent oracle-*-server-*-preinstall-verify -b to reinstate the boot values
++  # If there is any other oracle-*preinstall*.orabackup - call the most recent oracle-*preinstall*-verify -b to reinstate the boot values
+   
+   if [ "x$l_grubbackup" = "x$l_lastsaved" ]; then
+     # This is the latest change - so remove the entries from CHANGE_FILE
+@@ -1275,7 +1275,7 @@ f_uninstall ()
+ 
+    # Now, after removing any of current entries - if any previous sysctl is there call its install portion again
+    if [ "x$FINAL_PREINST" == "x1" ]; then
+-      l_otherpreinstall=`ls -t /etc/sysctl.d/*preinstall-sysctl.conf 2> /dev/null | awk -F "/" '{print $NF}' 2>/dev/null | grep -v "${PREINFILE} 2>/dev/null"`
++      l_otherpreinstall=`ls -t /etc/sysctl.d/*preinstall*.conf 2> /dev/null | awk -F "/" '{print $NF}' | grep -v "${PREINFILE}" | head -1`
+       echo "Other installed preinstallation rpm on this box - $l_otherpreinstall" >> ${PRE_PARAM_LOG}
+       if [ "x$l_otherpreinstall" != "x" ]; then
+            l_script=`echo $l_otherpreinstall | sed -e 's%^.*oracle%oracle%g' | sed -e 's%-sysctl.conf%%g'`

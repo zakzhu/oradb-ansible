@@ -1,0 +1,47 @@
+---
+# defaults file for pkg_reqs
+bind-utils
+psmisc unzip zip bzip2 xz-lzma-compat
+dos2unix python-devel lrzsz redhat-lsb-core
+autoconf automake unixODBC unixODBC-devel readline-devel glibc-utils
+numactl bison cpp gcc gcc-c++ compat-gcc-44 compat-gcc-44-c++
+
+bc
+binutils
+compat-libcap1-1.10-7.el7 (x86_64)
+compat-libstdc++-33-3.2.3-72.el7 (i686)
+compat-libstdc++-33-3.2.3-72.el7 (x86_64)
+glibc-2.17-307.el7 (i686)
+glibc-2.17-307.el7 (x86_64)
+glibc-devel-2.17-307.el7 (i686)
+glibc-devel-2.17-307.el7 (x86_64)
+ksh
+libaio-0.3.109-13.el7 (i686)
+libaio-0.3.109-13.el7 (x86_64)
+libaio-devel-0.3.109-13.el7 (i686)
+libaio-devel-0.3.109-13.el7 (x86_64)
+libgcc-4.8.5-39.el7 (i686)
+libgcc-4.8.5-39.el7 (x86_64)
+libstdc++-4.8.5-39.el7 (i686)
+libstdc++-4.8.5-39.el7 (x86_64)
+libstdc++-devel-4.8.5-39.el7 (i686)
+libstdc++-devel-4.8.5-39.el7 (x86_64)
+# libxcb-1.9-5.el7 (i686)
+# libxcb-1.9-5.el7 (x86_64)
+# libX11-1.6.0-2.1.el7 (i686)
+# libX11-1.6.0-2.1.el7 (x86_64)
+# libXau-1.0.8-2.1.el7 (i686)
+# libXau-1.0.8-2.1.el7 (x86_64)
+# libXi-1.7.2-1.el7 (i686)
+# libXi-1.7.2-1.el7 (x86_64)
+# libXtst-1.2.2-1.el7 (i686)
+# libXtst-1.2.2-1.el7 (x86_64)
+# libXrender (i686)
+# libXrender (x86_64)
+# libXrender-devel (i686)
+# libXrender-devel (x86_64)
+make
+net-tools
+nfs-utils
+smartmontools
+sysstat

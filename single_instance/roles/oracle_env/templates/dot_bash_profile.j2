@@ -1,0 +1,54 @@
+# .bash_profile
+
+# Get the aliases and functions
+if [ -f ~/.bashrc ]; then
+	. ~/.bashrc
+fi
+
+# User specific environment and startup programs
+umask 022
+
+EDITOR=vim
+LANG=en_US.UTF-8
+TMP=/tmp
+TMPDIR=$TMP
+
+NLS_DATE_FORMAT="YYYY-MM-DD HH24:MI:SS"
+NLS_LANG=AMERICAN_AMERICA.ZHS16GBK
+
+ORACLE_SID={{ oracle_sid }}
+
+ORACLE_BASE={{ oracle_base }}
+ORACLE_INVENTORY={{ oracle_inventory }}
+ORACLE_HOME={{ oracle_home }}
+SQL_HOME={{ sql_home }}
+
+JAVA_HOME=$ORACLE_HOME/jdk/jre
+
+LD_LIBRARY_PATH=$ORACLE_HOME/lib
+NETWORK_ADMIN=$ORACLE_HOME/network/admin
+OPATCH=$ORACLE_HOME/OPatch
+RDBMS_ADMIN=$ORACLE_HOME/rdbms/admin
+SQLPLUS_ADMIN=$ORACLE_HOME/sqlplus/admin
+
+PATH=$HOME/.local/bin:$HOME/bin:$PATH
+PATH=$ORACLE_HOME/bin:$LD_LIBRARY_PATH:$NETWORK_ADMIN:$OPATCH:$RDBMS_ADMIN:$SQLPLUS_ADMIN:$SQL_HOME/bin:$PATH
+PATH=$JAVA_HOME/bin:$PATH
+
+THREADS_FLAG=native
+
+export EDITOR LANG TMP TMPDIR
+export NLS_DATE_FORMAT NLS_LANG
+export ORACLE_SID
+export ORACLE_BASE ORACLE_INVENTORY ORACLE_HOME SQL_HOME JAVA_HOME
+export PATH
+export THREADS_FLAG
+
+# User specific aliases
+alias sqlplus="sql"
+alias rman="rlwrap rman"
+alias asmcmd="rlwrap asmcmd"
+
+alias cdbase="cd $ORACLE_BASE"
+alias cdhome="cd $ORACLE_HOME"
+alias cdnet="cd $NETWORK_ADMIN"

@@ -1,0 +1,116 @@
+# Oracle-database-server 12cR2 Parameter config file
+#Kernel parameters
+#category:arch:kernel:distribution:parameter:recommended-value
+
+kernelcomment:
+kernelcomment:oracle-database-server-12cR2-preinstall setting for fs.file-max is 6815744
+kernel:*:*:*:fs.file-max:6815744
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for kernel.sem is '250 32000 100 128'
+kernel:*:*:*:kernel.sem:250 32000 100 128
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for kernel.shmmni is 4096
+kernel:*:*:*:kernel.shmmni:4096
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for kernel.shmall is 1073741824 on x86_64
+kernel:*:*:*:kernel.shmall:1073741824
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for kernel.shmmax is 4398046511104 on x86_64 
+kernel:*:*:*:kernel.shmmax:4398046511104
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for kernel.panic_on_oops is 1 per Orabug 19212317
+kernel:*:*:*:kernel.panic_on_oops:1
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for net.core.rmem_default is 262144
+kernel:*:*:*:net.core.rmem_default:262144
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for net.core.rmem_max is 4194304
+kernel:*:*:*:net.core.rmem_max:4194304
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for net.core.wmem_default is 262144
+kernel:*:*:*:net.core.wmem_default:262144
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for net.core.wmem_max is 1048576
+kernel:*:*:*:net.core.wmem_max:1048576
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for net.ipv4.conf.all.rp_filter is 2
+kernel:*:*:*:net.ipv4.conf.all.rp_filter:2
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for net.ipv4.conf.default.rp_filter is 2
+kernel:*:*:*:net.ipv4.conf.default.rp_filter:2
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for fs.aio-max-nr is 1048576
+kernel:*:*:*:fs.aio-max-nr:1048576
+kernelcomment:
+
+kernelcomment:oracle-database-server-12cR2-preinstall setting for net.ipv4.ip_local_port_range is 9000 65500
+kernel:*:*:*:net.ipv4.ip_local_port_range:9000 65500
+kernelcomment:
+
+
+#Oracle OS User limits (domain=oracle/*)
+#category:arch:kernel:distribution:type:item:recommended-value
+
+usercomment:
+usercomment:*:oracle-database-server-12cR2-preinstall setting for nofile soft limit is 1024
+user:*:*:*:soft:nofile:1024
+
+usercomment:
+usercomment:*:oracle-database-server-12cR2-preinstall setting for nofile hard limit is 65536
+user:*:*:*:hard:nofile:65536 
+
+usercomment:
+usercomment:*:oracle-database-server-12cR2-preinstall setting for nproc soft limit is 16384 
+usercomment:*:refer orabug15971421 for more info.
+user:*:*:*:soft:nproc:16384 
+
+usercomment:
+usercomment:*:oracle-database-server-12cR2-preinstall setting for nproc hard limit is 16384
+user:*:*:*:hard:nproc:16384
+
+usercomment:
+usercomment:*:oracle-database-server-12cR2-preinstall setting for stack soft limit is 10240KB
+user:*:*:*:soft:stack:10240
+
+usercomment:
+usercomment:*:oracle-database-server-12cR2-preinstall setting for stack hard limit is 32768KB
+user:*:*:*:hard:stack:32768
+
+usercomment:
+usercomment:*:oracle-database-server-12cR2-preinstall setting for memlock hard limit is maximum of 128GB on x86_64 or 3GB on x86 OR 90 % of RAM
+user:*:*:*:hard:memlock:134217728
+
+usercomment:
+usercomment:*:oracle-database-server-12cR2-preinstall setting for memlock soft limit is maximum of 128GB on x86_64 or 3GB on x86 OR 90% of RAM
+user:*:*:*:soft:memlock:134217728
+
+#Kernel boot parameters
+#category:arch:processor:kernel:distribution:parameter:recommended-value
+boot:x86_64:*:*:*:numa:off
+boot:*:*:*:*:transparent_hugepage:never
+
+#Group Names and IDs
+#category:arch:processor:kernel:distribution:parameter:recommended-value
+group:*:*:*:*:oinstall:54321
+group:*:*:*:*:dba:54322
+group:*:*:*:*:oper:54323
+group:*:*:*:*:backupdba:54324
+group:*:*:*:*:dgdba:54325
+group:*:*:*:*:kmdba:54326
+group:*:*:*:*:racdba:54330
+
+#User name and IDs
+#category:arch:processor:kernel:distribution:parameter:recommended-value
+username:*:*:*:*:oracle:54321:oinstall,dba,oper,backupdba,dgdba,kmdba,racdba

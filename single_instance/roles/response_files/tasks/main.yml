@@ -1,0 +1,14 @@
+---
+# tasks file for response_files
+
+- import_tasks: common.yml
+  tags:
+    - r_response_files_t_common
+
+- import_tasks: prepare_netca.yml
+  tags:
+    - r_response_files_t_prepare_netca
+
+- import_tasks: prepare_dbca.yml
+  tags:
+    - r_response_files_t_prepare_dbca

@@ -1,0 +1,1388 @@
+#!/bin/bash
+##########################################################
+#
+#  Copyright (c) 2018, Oracle. All rights reserved
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software
+#  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+# Name: oracle-database-server-12cR2-preinstall-verify
+# Description: A script to verify and set Oracle Preinstall settings for 12c 
+# on Oracle Linux.
+#
+
+#Backport of Orabug 20676277
+LANG=C
+PWD=`/usr/bin/readlink $0`;
+PWD=`/usr/bin/dirname ${PWD:-$0}`;
+BASE_DIR=`cd ${PWD} && /bin/pwd`;
+
+PREINFILE=`basename $0 | sed -e 's/-verify$//g'`
+
+RUN_PREINSTALL_EXPR=`echo $PREINFILE | sed -e 's/-/_/g' -e 's/\(.*\)/\U\1/'`
+TEST_LOG_LOC=/var/log/${PREINFILE}/results;
+CONFIG_FILE=${BASE_DIR}/${PREINFILE}.conf
+PARAMS=${BASE_DIR}/${PREINFILE}.param;
+OLD_PARAMS=${TEST_LOG_LOC}/.${PREINFILE}.param;
+PRE_PARAM_LOG=${TEST_LOG_LOC}/orakernel.log;
+PRE_DATE=`date "+%b-%d-%Y-%H-%M-%S"`
+BACKUP_DIR=/var/log/${PREINFILE}/backup/${PRE_DATE}
+
+SYSCTL="/etc/sysctl.conf";
+SYSCTL_DIR="/etc/sysctl.d"
+SYSCTL_INIT_BACKUP="/etc/sysctl.d/99-initial-sysctl.conf"
+
+GRUB1_DIR=/boot/grub
+GRUB2_DIR=/boot/grub2
+GRUB_EFI_DIR=/boot/efi/EFI/redhat/
+
+GRUB1_FILE=grub.conf
+GRUB2_FILE=grub.cfg
+
+LIMITSFILE="/etc/security/limits.d/${PREINFILE}.conf"
+SYSCONFIGNET="/etc/sysconfig/network"
+SYSCONFIGNETBKP=${SYSCONFIGNET}.orabackup
+LOCKFILE=/var/lock/subsys/oracle-preinstall.lock
+CUT="/bin/cut"
+SED="/bin/sed"
+
+LARCH=`/bin/uname -m | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+LKERNEL=`/bin/uname -r | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+LDISTRO=`/bin/cat /etc/issue | $SED '/^$/d' | $SED q | $SED 's/Welcome to//g' | $CUT -d"(" -f1 | $SED 's/^[ \t]*//' | $SED 's/[ \t]*$//' `
+/bin/cat /proc/cpuinfo | /bin/grep -i "vendor_id" | /bin/grep -i "intel" 1> /dev/null
+if [ "$?" -eq "0" ]; then
+  LPROCESSOR=Intel
+else
+  LPROCESSOR=AMD
+fi
+
+USERID="54321"
+GROUPID="54321"
+RESULT=0
+
+f_lock ()
+{
+   exec 199>${LOCKFILE};
+   flock -x 199;
+}
+
+f_unlock ()
+{
+   flock -u 199;
+   rm -f ${LOCKFILE}
+}
+
+f_checkosrelease ()
+{
+   release_file="/etc/system-release"
+   if [ ! -f ${RELEASE_FILE} ]; then
+      # Most likely a redhat system
+      release_file="/etc/redhat-release"
+   fi;
+   export RELEASE_VERSION=`cat ${release_file} | sed -e 's/[a-zA-Z]*//g' |  sed -e 's/\(.*\)//g' | tr -d  " " | cut -d "." -f1`
+}
+
+f_checkgrub ()
+{
+  export GRUB_VER=1
+  export GRUB_EFI=0
+ 
+  if [ -d /boot/grub2 ]; then
+      export GRUB_VER=2
+  fi
+
+  BOOTLINK=` /usr/bin/readlink -e ${GRUB1_DIR}/menu.lst 2> /dev/null`;
+  if [ ! -z $BOOTLINK ]; then
+    BOOTDIR=${GRUB1_DIR}
+    BOOTFILE=$BOOTLINK
+  else
+    # Check for GRUB2
+    BOOTLINK=` /usr/bin/readlink -e ${GRUB2_DIR}/grub.cfg  2> /dev/null`;
+    if [ ! -z $BOOTLINK ]; then
+       BOOTDIR=${GRUB2_DIR}
+       BOOTFILE=$BOOTLINK
+    elif [ -f ${GRUB2_DIR}/${GRUB2_FILE} ]; then
+       BOOTDIR=${GRUB2_DIR}
+       BOOTFILE=${GRUB2_DIR}/${GRUB2_FILE}
+  # Fix for Orabug 20675405 - preinstall on a UEFI system
+    elif [ -f ${GRUB_EFI_DIR}/${GRUB1_FILE} ]; then
+       GRUB_EFI=1
+       BOOTDIR=${GRUB_EFI_DIR}
+       BOOTFILE=${GRUB_EFI_DIR}/${GRUB1_FILE}
+    elif [ -f ${GRUB_EFI_DIR}/${GRUB2_FILE} ]; then
+       GRUB_EFI=1
+       BOOTDIR=${GRUB_EFI_DIR}
+       BOOTFILE=${GRUB_EFI_DIR}/${GRUB2_FILE}
+    else 
+       BOOTDIR=${GRUB1_DIR}
+       BOOTFILE=${GRUB1_DIR}/${GRUB1_FILE}
+    fi
+  fi
+
+  if [ -f /etc/default/grub ]; then
+     CHANGE_FILE=/etc/default/grub
+  else
+     CHANGE_FILE=${BOOTFILE}
+  fi
+
+  export BOOTFILE BOOTDIR CHANGE_FILE GRUB_EFI
+  export CHANGE_FILE_INIT_BACKUP="${CHANGE_FILE}-initial.orabackup"
+
+  if [ ! -f ${BOOTFILE} ]; then
+     echo "${BOOTFILE} not present.. .." >> ${PRE_PARAM_LOG}
+     return 1;
+  fi
+
+  return 0;
+}
+
+# Function for Workaround of Orabug 20734786
+f_grub2_mkconfig ()
+{
+   #f_checkgrub needs to have been called before this function
+
+   if [ $GRUB_VER -ne 2 ]; then
+      return 0;
+   fi;
+
+   if [ $GRUB_EFI -eq 1 ]; then
+      echo "EFI system"  >> ${PRE_PARAM_LOG}
+      G_DIR=${GRUB_EFI_DIR}
+   else
+      G_DIR=${GRUB2_DIR}
+   fi;
+   
+   export G_DIR
+   arch=`uname -m`
+
+   echo "G_DIR=$G_DIR" >> ${PRE_PARAM_LOG}
+
+   saved_entry=`cat ${G_DIR}/grubenv | grep saved_entry`
+   if [ "x$saved_entry" != "x" ]; then
+      saved_entry=`echo $saved_entry | awk -F"=" '{print $2}'`
+      saved_default=`echo "${saved_entry}" |  tr -s " " "\n" | grep $arch | tr -d "("`
+      if [ "x$saved_default" == "x" ]; then
+         l_ord=`echo ${saved_entry} | tr -d " "`
+         let l_ord=$l_ord+1
+      else
+         # saved_entry is a string - match it in grub config file
+         l_ord=`grep ^menuentry ${BOOTFILE} | grep -n "$saved_entry" | awk -F ":" '{print $1}'`
+      fi
+   fi
+
+   if [ "x$l_ord" == "x" ]; then
+      if [ "x$saved_default" == "x" ]; then
+         echo "WARNING: Unable to obtain saved_entry. Please check grubenv and correct if need be" >> ${PRE_PARAM_LOG}
+         echo "Trying to default to current booted kernel" >> ${PRE_PARAM_LOG}
+         saved_default=`uname -r`
+      fi
+      echo "Getting the first entry available in $BOOTFILE for $saved_default" >> ${PRE_PARAM_LOG}
+      l_ord=`grep vmlinuz ${BOOTFILE} | grep -n "${saved_default} " | head -1 | awk -F":" '{print $1}'`
+   else
+      saved_default=`grep vmlinuz ${BOOTFILE} | head -$l_ord | tail -1 | tr -s " " "\n" | grep vmlinuz | ${SED} -e 's%^\/vmlinuz-%%g'`
+   fi
+   saved_entry_line=`cat ${BOOTFILE} | grep vmlinuz | head -$l_ord | tail -1 | ${SED} "s%vmlinuz-${saved_default} .*%vmlinuz-${saved_default} %g"`
+
+   echo "Default kernel is ->  $saved_default"  >> ${PRE_PARAM_LOG}
+   echo "Default saved_entry is -> $saved_entry" >> ${PRE_PARAM_LOG}
+   echo "Default saved_entry_line is -> $saved_entry_line" >> ${PRE_PARAM_LOG}
+   echo "Saving a copy of grubenv... in ${BACKUP_DIR}" >> ${PRE_PARAM_LOG}
+   mkdir -p ${BACKUP_DIR}
+   cp ${G_DIR}/grubenv ${BACKUP_DIR}/grubenv.`date +%d-%m-%y-%H-%M-%S`
+
+   grub2-mkconfig -o ${BOOTFILE} >> ${PRE_PARAM_LOG} 2>&1
+   l_ord=`grep vmlinuz ${G_DIR}/grub.cfg | grep -n "${saved_entry_line}" | awk -F":" '{print $1}'`
+   if [ "x$l_ord" == "x" ]; then
+      echo "Unable to obtain the replica of saved entry line in new grub.cfg. Defaulting to first line matching the kernel" >> ${PRE_PARAM_LOG}
+      l_ord=`grep vmlinuz ${G_DIR}/grub.cfg | grep -n "${saved_default}" | head -1 | awk -F":" '{print $1}'`
+   fi
+
+   let l_ord=$l_ord-1
+   echo "The saved kernel $saved_default is now at position - $l_ord" >> ${PRE_PARAM_LOG}
+   grub2-set-default $l_ord >> ${PRE_PARAM_LOG} 2>&1
+   return $?;
+}
+
+#A backup of the original menu.lst is also  mainatained at $BACKUP_DIR
+f_checkboot ()
+{
+  declare -i flag=0;
+
+  KERNEL_PRE_PARAM_LOG="${TEST_LOG_LOC}/kernel_bootparams.org";
+
+  f_checkgrub;
+  if [ $? -ne 0 ]; then return 1; fi;
+
+  # Critical section - Reading and changing boot parameters 
+  f_lock 
+
+  if [ ! -f ${CHANGE_FILE_INIT_BACKUP} ]; then
+     echo "Saving a copy of ${CHANGE_FILE} file in ${CHANGE_FILE_INIT_BACKUP}" >> ${PRE_PARAM_LOG}
+     cp ${CHANGE_FILE} ${CHANGE_FILE_INIT_BACKUP};
+  fi;
+  
+  # If there is a previous file by name ${BOOTFILE}-${PREINFILE}.orabackup, remove that
+  if [ -f ${CHANGE_FILE}-${PREINFILE}.orabackup ]; then
+     echo "Removing previous backup by the same name - `ls ${CHANGE_FILE}-${PREINFILE}.orabackup`" >> ${PRE_PARAM_LOG}
+     rm -f ${CHANGE_FILE}-${PREINFILE}.orabackup
+  fi
+
+  CHANGE_FILE_BACKUP=${CHANGE_FILE}-${PREINFILE}.orabackup
+  mkdir --mode 0700 -p ${BACKUP_DIR};
+  /bin/cp ${BOOTFILE} ${BACKUP_DIR} 2>/dev/null
+  if [ "$?" -ne "0" ]; then      
+    echo "Failed to copy ${BOOTFILE} to ${BACKUP_DIR}.. .." >> ${PRE_PARAM_LOG}
+    f_unlock;
+    return 1;
+  fi
+  
+  if [ ! -f ${BOOTFILE}-${PREINFILE}.orabackup ]; then 
+     /bin/cp ${BOOTFILE} ${BOOTFILE}-${PREINFILE}.orabackup
+     if [ "$?" -ne "0" ]; then      
+        echo "Failed to copy ${BOOTFILE} to ${BOOTFILE}-${PREINFILE}.orabackup.." >> ${PRE_PARAM_LOG}
+        f_unlock;
+        return 1;
+     fi
+  fi
+
+  echo "Saving a copy of ${CHANGE_FILE} in ${BACKUP_DIR}..." >> ${PRE_PARAM_LOG}
+  /bin/cp ${CHANGE_FILE} ${BACKUP_DIR} 2>/dev/null
+  if [ "$?" -ne "0" ]; then
+    echo "Failed to copy ${CHANGE_FILE} to ${BACKUP_DIR}.. .." >> ${PRE_PARAM_LOG}
+    f_unlock;
+    return 1;
+  fi
+ 
+  echo "Verifying kernel boot parameters as per Oracle recommendations..." >> ${PRE_PARAM_LOG}
+
+  while read line
+  do
+    # skip comments
+    echo $line | /bin/grep -e "^#" > /dev/null
+    if [ $? == 0 ]; then
+      continue;
+    fi
+		
+    CATEGORY=`echo $line | $CUT -d":" -f1 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+    if [ "x${CATEGORY}" == "xboot" ] ; then
+      ARCH=`echo $line | $CUT -d":" -f2 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      PROCESSOR=`echo $line | $CUT -d":" -f3 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      PARAM=`echo $line | $CUT -d":" -f6 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      RECVALUE=`echo "$line" | $CUT -d":" -f7 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      param_str="$PARAM=$RECVALUE"
+	
+      if [ "x${ARCH}" == "x*" -o "x${ARCH}" == "x${LARCH}" ] ; then
+        if [ "x${PROCESSOR}" == "x*" -o "x${PROCESSOR}" == "x${LPROCESSOR}" ] ; then
+          # fix all the boot lines
+          #  For GRUB_VER=2, we simply fix the grub default file under /etc and run the grub2-mkconfig
+          #
+          if [ ${GRUB_VER} -eq 2 ]; then
+             # Get the lines to be changed copied over so that we can use the same logic for adding the params
+             cat ${CHANGE_FILE} | grep GRUB_CMDLINE_LINUX | cut -d "=" -f2- > ${KERNEL_PRE_PARAM_LOG}
+          else
+             # This is GRUB 1
+  	     /bin/cat ${CHANGE_FILE} | /bin/egrep -v '#' | /bin/grep "kernel " > ${KERNEL_PRE_PARAM_LOG}
+          fi # GRUB_VER
+
+	  while read kernel_bootparam
+	  do
+	    # set to recommended value if not already set
+	    echo "$kernel_bootparam" | /bin/grep ${PARAM} > /dev/null
+	    if [ $? -ne 0 ]; then
+              echo "$kernel_bootparam" | grep "\"" > /dev/null 2>&1
+              if [ $? -ne 0 ]; then 
+   	         new_kernel_bootparam="$kernel_bootparam $param_str";
+              else
+                 new_kernel_bootparam=`echo $kernel_bootparam | tr -d "\""`
+                 new_kernel_bootparam="\"$new_kernel_bootparam $param_str\""
+              fi
+
+	      $SED -i  "s%$kernel_bootparam.*$%$new_kernel_bootparam%g" ${CHANGE_FILE}
+	      echo "old boot params: $kernel_bootparam" >> ${PRE_PARAM_LOG}
+              echo "new boot params: $new_kernel_bootparam" >> ${PRE_PARAM_LOG}
+	      echo >> ${PRE_PARAM_LOG}
+              flag=1
+	    else
+              l_value=`echo "$kernel_bootparam" | tr -s " " "\n" | /bin/grep ${PARAM} | cut -d "=" -f2 | tail -1`
+              echo $l_value | grep -i ${RECVALUE} > /dev/null 2>&1
+              if [ $? -ne 0 ]; then
+                 $SED -i "s%${PARAM}=${l_value}%${param_str}%g" ${CHANGE_FILE}
+                 echo "Changing value of $PARAM from $l_value to $RECVALUE" >> ${PRE_PARAM_LOG}
+                 flag=1
+              else
+	         echo "${param_str} already present" >> ${PRE_PARAM_LOG}
+	         echo >> ${PRE_PARAM_LOG}
+              fi;
+	    fi;
+          done < ${KERNEL_PRE_PARAM_LOG}
+	fi # PROCESSOR
+      fi # ARCH
+    fi # CATEGORY
+  done < ${PARAMS} # READ PARAMS FILE
+  cp ${CHANGE_FILE} ${CHANGE_FILE_BACKUP}
+
+  if [ $flag -eq 1 ]; then
+    echo "Setting kernel boot parameters as per Oracle recommendations..." >> ${PRE_PARAM_LOG}
+    f_grub2_mkconfig;
+    if [ $? -ne 0 ]; then
+       echo "WARNING: Unable to restore boot order. Please check & correct default kernel"  >> ${PRE_PARAM_LOG}
+    fi
+
+    echo "Boot parameters will be effected on next reboot" >> ${PRE_PARAM_LOG}
+    echo "Altered file ${CHANGE_FILE}" >> ${PRE_PARAM_LOG}
+    echo "Copy of the changed file is in - ${CHANGE_FILE_BACKUP}" >> ${PRE_PARAM_LOG}
+    echo "Copy of the original file is in - ${BACKUP_DIR}" >> ${PRE_PARAM_LOG}
+  fi
+
+  echo "RUN_${RUN_PREINSTALL_EXPR}=NO" > ${CONFIG_FILE}
+  /bin/rm ${KERNEL_PRE_PARAM_LOG} 2> /dev/null
+  f_unlock;
+  return 0;
+}
+
+#Add Oracle PRE recommended kernel parameters to /etc/sysctl.conf
+#A backup of the original /etc/sysctl.conf is also  mainatained at $BACKUP_DIR
+f_checkkernel ()
+{
+
+  #shmmax and shmall values are based on total memory in the system
+  l_raminkb=`/bin/cat /proc/meminfo | /bin/grep MemTotal: | /bin/awk -F ' ' '{print $2}'`
+
+  # Critical section - reading and changing sysctl parameters
+  f_lock;
+
+  if [ ! -f ${SYSCTL_INIT_BACKUP} ]; then
+    SYSCTL_INIT_BACKUP="/etc/sysctl.d/99-initial-sysctl.conf"
+    echo "Saving a copy of the initial sysctl.conf" >> ${PRE_PARAM_LOG}
+    cp ${SYSCTL} ${SYSCTL_INIT_BACKUP}
+  fi
+
+  /bin/cp ${SYSCTL} ${BACKUP_DIR}
+  if [ "$?" -ne "0" ]; then      
+    echo "Failed to copy ${SYSCTL} to ${BACKUP_DIR}.. .." >> ${PRE_PARAM_LOG}
+    f_unlock
+    return 1;
+  fi
+
+  # Remove if there is any other ${SYSCTL_DIR}/99-${PREINFILE}-sysctl.conf
+  if [ -f ${SYSCTL_DIR}/99-${PREINFILE}-sysctl.conf ]; then
+     rm -f  ${SYSCTL_DIR}/99-${PREINFILE}-sysctl.conf;
+  fi;
+
+  echo "Verifying  kernel parameters as per Oracle recommendations..." >> ${PRE_PARAM_LOG}
+
+  # if old ${OLD_PARAMS} present which was copied during %pre of rpm install , remove older 
+  # comments. Otherwise it may conflict with new comments and settings.	
+  if [  -f  "${OLD_PARAMS}"  ];then
+    while read line
+    do
+      # skip comments
+      echo $line | /bin/grep -e "^#" > /dev/null
+      if [ $? == 0 ]; then
+        continue;
+      fi
+      CATEGORY=`echo $line | $CUT -d":" -f1 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      TMP=`echo $line | $CUT -d":" -f2 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      if [ -z "${TMP}" ];then
+        continue
+      fi
+      if [ "x${CATEGORY}" == "xkernelcomment" ] ; then
+        TMP=`echo $line | $CUT -d":" -f3 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+	if [ -z "${TMP}" ]; then
+	  COMMENT=`echo $line | $CUT -d":" -f2- | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+	else
+	  DISTRO=`echo $line | $CUT -d":" -f2 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+	  if [ "x${DISTRO}" == "x${LDISTRO}" ] ; then
+	    COMMENT=`echo $line | $CUT -d":" -f3- | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+	  else
+	    ARG=`echo $line | $CUT -d":" -f2 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+	    case ${ARG} in
+		"fs.file-max" | "net.core.wmem_max" | "net.ipv4.ip_local_port_range" )
+	 	  COMMENT=`echo $line | $CUT -d":" -f2- | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+		;;
+		* )	
+		continue
+		;;
+	    esac
+	  fi
+       fi
+       if [ ! -z "${COMMENT}" ] ; then
+         ${SED} -i /"^#[[:space:]]*${COMMENT}.*"/d ${SYSCTL}
+       fi
+      else
+       continue;
+    fi
+    done < "${OLD_PARAMS}"
+
+  fi
+
+  while read line
+  do
+    # skip comments
+    echo $line | /bin/grep -e "^#" > /dev/null
+    if [ $? == 0 ]; then
+      continue;
+    fi
+    COMMENT=""
+    CATEGORY=`echo $line | $CUT -d":" -f1 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+    if [ "x${CATEGORY}" == "xkernelcomment" ] ; then
+      TMP=`echo $line | $CUT -d":" -f2 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      if [ -z "${TMP}" ];then
+        echo -e "\n" >> ${SYSCTL}
+	continue
+      fi
+      TMP=`echo $line | $CUT -d":" -f3 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      if [ -z "${TMP}" ]; then
+        COMMENT=`echo $line | $CUT -d":" -f2- | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      else
+        DISTRO=`echo $line | $CUT -d":" -f2 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+        if [ "x${DISTRO}" == "x${LDISTRO}" ] ; then
+          COMMENT=`echo $line | $CUT -d":" -f3- | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+        else
+	  continue
+        fi
+      fi
+
+      if [ ! -z "${COMMENT}" ]; then
+        PREINST_COMMENT=`echo $COMMENT | sed -e 's/^.*setting/setting/g' -e "s/is.*$/is/g"`
+        echo "Trying to remove instances of  - ${PREINST_COMMENT}" >> ${PRE_PARAM_LOG}
+        ${SED} -i /"^#.*preinstall.*${PREINST_COMMENT}.*"/d ${SYSCTL}
+        echo "# $COMMENT" >> ${SYSCTL}
+      fi
+    fi
+    if [ "x${CATEGORY}" == "xkernel" ] ; then
+      ARCH=`echo $line | $CUT -d":" -f2 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      KERNEL=`echo $line | $CUT -d":" -f3 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      DISTRO=`echo $line | $CUT -d":" -f4 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      PARAM=`echo $line | $CUT -d":" -f5 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      RECVALUE=`echo "$line" | $CUT -d":" -f6 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      if [ "x${ARCH}" == "x*" -o "x${ARCH}" == "x${LARCH}" ] ; then
+        if [ "x${KERNEL}" == "x*" -o "x${KERNEL}" == "x${LKERNEL}" ] ; then
+          if [ "x${DISTRO}" == "x*" -o "x${DISTRO}" == "x${LDISTRO}" ] ; then
+            #special cases for shmmax based on architecture
+            if [ "$PARAM" == "kernel.shmmax" ]; then
+              # Setting shmmax to 4GB on 32 bit machines
+ 	      if [ "x${LARCH}" = "xi686" ]; then
+  	        RECVALUE=4294967295 ;
+	        # Setting shmmax  as per bz7256
+	      elif [ "x${LARCH}" = "xx86_64" ]; then 
+	        RECVALUE=4398046511104 ;
+	      fi
+	    fi
+	    #special cases for shmall based on architecture
+	    if [ "$PARAM" == "kernel.shmall" ]; then
+	      if [ "x${LARCH}" = "xi686" ]; then
+	        RECVALUE=2097152;
+	      elif [ "x${LARCH}" = "xx86_64" ]; then 
+	        RECVALUE=1073741824;
+	      fi
+	    fi
+            #Backport of  Orabug20095949
+            line=`grep "^[[:space:]]*${PARAM}[[:space:]]*=[[:space:]]*[0-9]\+" ${SYSCTL} | tail -1`
+            num_of_lines=`grep "^[[:space:]]*${PARAM}[[:space:]]*=[[:space:]]*[0-9]\+" ${SYSCTL} | wc -l | awk -F':' '{print $1}'`;
+            if [ ${num_of_lines} -gt 1 ]; then
+               echo "Found multiple entries for ${PARAM}. Retaining only the last entry and removing the previous ones" >> $PRE_PARAM_LOG
+            fi
+
+            if [ $num_of_lines -gt 0 ]; then
+              if [ "x$DEBUG" == "x1" ]; then
+                 echo "Latest entry is - $line" >> ${PRE_PARAM_LOG}
+              fi
+	      old=`echo $line | ${SED} -e 's/ //g' | cut -d= -f2 | grep -o "[0-9]*"` 
+              if [ "x$DEBUG" == "x1" ]; then
+                 echo "Value for the ${PARAM} - $old" >> ${PRE_PARAM_LOG}
+              fi
+	      if [ -z $old ]; then
+	        echo -e "Not able to locate value of ${PARAM}" >>  $PRE_PARAM_LOG
+	      else
+                if [ "$PARAM" == "kernel.sem" -o  "$PARAM" == "net.ipv4.ip_local_port_range" ];then
+                  RECVALUE2=`echo $RECVALUE | ${SED} 's/ //g'`
+                  if  [ $RECVALUE2 -ge $old ] ;then
+                    ${SED} -i /"^[ \t]*${PARAM}.*"/d ${SYSCTL}
+                    if [ $RECVALUE2 -eq $old ]; then
+                       echo -e "${PARAM} is matching preinstall config" >>  $PRE_PARAM_LOG
+                       echo "$line" |  ${SED} 's/^[[:space:]]*//g' >> $PRE_PARAM_LOG
+                       echo "$line" |  ${SED} 's/^[[:space:]]*//g' >> ${SYSCTL}
+                    else
+                       echo -e "Changing ${PARAM} to match preinstall config" >>  $PRE_PARAM_LOG
+                       echo "$PARAM = $RECVALUE" >> $PRE_PARAM_LOG
+                       echo "$PARAM = $RECVALUE" >> ${SYSCTL}
+                    fi;
+                  else
+                     ${SED} -i /"^[ \t]*${PARAM}.*"/d ${SYSCTL}
+                     echo -e "${PARAM} is higher than preinstall config. Retaining original values" >>  $PRE_PARAM_LOG
+                     echo -e "${line}" | ${SED} 's/^[[:space:]]*//g' >>  $PRE_PARAM_LOG
+                     echo -e "${line}" | ${SED} 's/^[[:space:]]*//g' >>  ${SYSCTL}
+                  fi
+                  continue
+                fi
+
+	        if [ $RECVALUE -ge $old ] ;then
+                  ${SED} -i /"^[ \t]*${PARAM}.*"/d ${SYSCTL}
+                  if [ $RECVALUE -eq $old ] ;then
+                    echo -e "${PARAM} is matching with preinstall config." >>  $PRE_PARAM_LOG
+	            echo "$line" |  ${SED} 's/^[[:space:]]*//g' >> $PRE_PARAM_LOG 
+	            echo "$line" |  ${SED} 's/^[[:space:]]*//g' >> ${SYSCTL} 
+                  else
+	            echo -e "Changing ${PARAM} to match preinstall config" >>  $PRE_PARAM_LOG
+	            echo "$PARAM = $RECVALUE" >> $PRE_PARAM_LOG 
+	            echo "$PARAM = $RECVALUE" >> ${SYSCTL} 
+    		  fi 
+		else
+                  ${SED} -i /"^[ \t]*${PARAM}.*"/d ${SYSCTL}
+                  echo -e "${PARAM} is higher than preinstall config. Retaining original values" >>  $PRE_PARAM_LOG
+		  echo -e "${line}" | ${SED} 's/^[[:space:]]*//g' >>  $PRE_PARAM_LOG
+		  echo -e "${line}" | ${SED} 's/^[[:space:]]*//g' >>  ${SYSCTL}
+		fi
+              fi
+            else
+	      echo -e "Adding ${PARAM} = ${RECVALUE} " >>  $PRE_PARAM_LOG
+              echo "$PARAM = $RECVALUE" >> ${SYSCTL} 
+            fi
+          fi
+        fi
+      fi
+    fi
+  done < ${PARAMS}
+		
+  #remove empty lines
+  /bin/cat -s ${SYSCTL} > ${SYSCTL}.tmp && /bin/mv ${SYSCTL}.tmp ${SYSCTL}
+  if [ "$?" -ne "0" ]; then
+   echo "Failed to move ${SYSCTL}.tmp to  ${SYSCTL}.. .." >> ${PRE_PARAM_LOG}
+   f_unlock;
+   return 1;
+  fi
+
+  cp ${SYSCTL} /etc/sysctl.d/99-${PREINFILE}-sysctl.conf
+
+  echo "Setting kernel parameters as per oracle recommendations..." >> ${PRE_PARAM_LOG}
+  echo "Altered file ${SYSCTL}" >> ${PRE_PARAM_LOG}
+  echo "Saved a copy of the current file in /etc/sysctl.d/99-${PREINFILE}-sysctl.conf" >> ${PRE_PARAM_LOG}
+  echo "Check /etc/sysctl.d for backups" >>  ${PRE_PARAM_LOG}
+
+# Fix the line below - this is specific to OL6/5 - would fail on OL7
+#  /sbin/chkconfig boot.sysctl on 2> /dev/null  1>&2
+  /sbin/sysctl --system 2> /dev/null  1>&2
+
+  f_unlock;
+  return  0;
+}
+
+
+#Add Oracle PRE recommended module options to /etc/modprobe.conf
+#A backup of the original file /etc/modprobe.conf is maintained at /etc/modprobe.conf.orabackup
+#A backup of the original /etc/modprobe.conf is also  mainatained at $BACKUP_DIR
+f_checkmoduleinfo ()
+{
+  echo "Verifying module parameters as per Oracle recommendations..." >> ${PRE_PARAM_LOG}
+  MODCONF="/etc/modprobe.conf"
+  MODCONFBACKUP="/etc/modprobe.conf.orabackup"
+  f_lock;
+  if [ ! -f $MODCONFBACKUP ]; then
+    /bin/cp ${MODCONF} ${MODCONFBACKUP} ;
+    if [ "$?" -ne "0" ]; then
+      echo "Failed to copy ${MODCONF} to ${MODCONFBACKUP}.. .." >> ${PRE_PARAM_LOG}
+      f_unlock;
+      return 1;
+    fi
+  fi
+
+  /bin/cp ${MODCONF} ${BACKUP_DIR}
+  if [ "$?" -ne "0" ]; then      
+   echo "Failed to copy ${MODCONF} to ${BACKUP_DIR}.. .." >> ${PRE_PARAM_LOG}
+   f_unlock;
+   return 1;
+  fi
+
+  FlowControlReset=0;
+  for i in `/sbin/ifconfig | /bin/awk ' /^[a-zA-Z0-9]+[ \t]+/ { print $1 } ' `
+  do
+    /sbin/ethtool -i $i  > /dev/null 2>&1;
+    if [ $? -eq 0 ]; then
+      driver=`/sbin/ethtool -i $i | /bin/grep -i "driver" | $CUT -d: -f2 | tr -d " "`;
+      if [ "x$driver" == "xe1000" ]; then
+        if [ -z "$e1000Params" ]; then
+          e1000Params="options e1000 FlowControl=1";
+	  e1000List="$i"
+	else
+	  #For each e1000 card, append 1 to the end of "options e1000 FlowControl=1" 
+	  e1000Params=$e1000Params,1
+	  e1000List="$e1000List $i"
+	fi
+      fi
+    fi
+  done;
+  if [ ! -z "$e1000Params" ] ; then
+    /bin/cat ${MODCONF} | /bin/grep "$e1000Params" > /dev/null 2>&1;
+    if [ $? -ne 0 ]; then
+      if [ `/bin/grep -c -e "^[ \t]*options[ \t]*e1000[ \t]*FlowControl.*$" ${MODCONF}` -eq 0 ]; then
+        echo "$e1000Params" >> ${MODCONF}
+      else
+	$SED -i 's/^[ \t]*'"options"'[ \t]*'"e1000"'[ \t]*'"FlowControl"'.*$/'"$e1000Params"'/' ${MODCONF}
+      fi
+      FlowControlReset=1;
+    else
+      echo "Option $e1000Params already present in /etc/modprobe.conf" >>  ${PRE_PARAM_LOG}
+    fi
+  fi
+
+  if [ ${FlowControlReset} -eq 1 ]; then
+    echo "Setting module parameters as per Oracle recommendations..." >> ${PRE_PARAM_LOG}
+    echo "Altered file ${MODCONF}"  >> ${PRE_PARAM_LOG}
+    echo "Original file backed up at ${MODCONFBACKUP}" >> ${PRE_PARAM_LOG}
+    if [ -n "$e1000Params" ]; then
+      for i in `echo "$e1000List"`
+      do
+        #For immediate effect of flowcontrol settings. FlowControl=1 translates to rx on, tx off
+	/sbin/ethtool -A $i rx on 2> /dev/null
+	/sbin/ethtool -A $i tx off 2> /dev/null
+      done;
+      /sbin/modprobe -v e1000 >>  ${PRE_PARAM_LOG}
+      if [ $? -eq 0 ]; then
+        echo "e1000 settings modified to include FlowControl=1" >>  ${PRE_PARAM_LOG}
+	/usr/bin/tail -5 /var/log/messages >> ${PRE_PARAM_LOG};
+      else
+        echo "e1000 settings modification failed to include FlowControl=1" >>  ${PRE_PARAM_LOG}
+        f_unlock;
+	return 1;
+      fi
+    else
+      echo "Warning: e1000  module settings not modified" >>  ${PRE_PARAM_LOG}
+      echo "module is not installed or not in use " >>  ${PRE_PARAM_LOG}
+    fi
+  else
+    echo "No settings to be modified" >> ${PRE_PARAM_LOG}
+  fi
+  f_unlock;
+  return 0;
+}
+
+
+#Add Oracle PRE recommended user limits parameters to /etc/security/limits.d/${PREINFILE}.conf
+#A backup of the original file ${PREINFILE}.conf is mainatained at $BACKUP_DIR
+f_checkuserinfo ()
+{
+
+  USER="oracle";
+  total_ram=`cat /proc/meminfo | grep MemTotal | awk -F " " '{ print $2}'`
+  max_memlock=`echo $(($total_ram*9/10))` 
+
+  f_lock;
+  if [ -f ${LIMITSFILE} ]; then
+    /bin/cp -f ${LIMITSFILE} ${BACKUP_DIR}
+    if [ "$?" -ne "0" ]; then
+      echo "Failed to copy ${LIMITSFILE} to ${BACKUP_DIR}.. .." >> ${PRE_PARAM_LOG}
+      f_unlock;
+      return 1;
+    fi
+    #Remove duplicate lines
+    /bin/awk '! a[$0]++' ${LIMITSFILE}  > ${LIMITSFILE}.tmp && /bin/mv ${LIMITSFILE}.tmp ${LIMITSFILE}
+    if [ "$?" -ne "0" ]; then
+      echo "Failed to move ${LIMITSFILE}.tmp to ${LIMITSFILE}.. .." >> ${PRE_PARAM_LOG}
+      f_unlock;
+      return 1;
+    fi
+  else
+    touch ${LIMITSFILE}
+  fi
+
+  echo "Verifying oracle user OS limits as per Oracle recommendations..." >> ${PRE_PARAM_LOG}
+  # if old ${OLD_PARAMS} present which was copied during %pre of rpm install , remove older 
+  # comments. Otherwise it may conflict with new comments and settings.	
+  if [ -f "${OLD_PARAMS}" ] ; then
+    while read line
+    do
+      echo $line | /bin/grep -e "^#" > /dev/null
+      if [ $? == 0 ]; then
+        continue;
+      fi
+      CATEGORY=`echo $line | $CUT -d":" -f1 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      if [ "x${CATEGORY}" == "xusercomment" ] ; then
+        TMP=`echo $line | $CUT -d":" -f2 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+	if [ -z "${TMP}" ];then
+	  continue
+	fi
+	ARCH=`echo "$line" | $CUT -d":" -f2 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+        COMMENT=`echo "$line" | $CUT -d":" -f3- | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+	if [ "x${ARCH}" == "x*" -o "x${ARCH}" == "x${LARCH}" ] ; then
+	  if [ ! -z "${COMMENT}" ] ; then
+            ${SED} -i /"^#[[:space:]]*$COMMENT"/d ${LIMITSFILE}
+	  fi
+	fi
+      else
+        continue ;
+      fi
+
+    done < "${OLD_PARAMS}"
+  fi
+
+
+  while read line
+  do
+    echo $line | /bin/grep -e "^#" > /dev/null
+    if [ $? == 0 ]; then
+      continue;
+    fi
+    CATEGORY=`echo $line | $CUT -d":" -f1 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+    if [ "x${CATEGORY}" == "xusercomment" ] ; then
+      TMP=`echo $line | $CUT -d":" -f2 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      if [ -z "${TMP}" ];then
+        echo -e "\n" >> ${LIMITSFILE}
+	continue
+      fi
+      ARCH=`echo "$line" | $CUT -d":" -f2 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      COMMENT=`echo "$line" | $CUT -d":" -f3- | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      if [ "x${ARCH}" == "x*" -o "x${ARCH}" == "x${LARCH}" ] ; then
+        if [ ! -z "${COMMENT}" ]; then
+          ${SED} -i /"^#[[:space:]]*$COMMENT"/d ${LIMITSFILE}
+          echo "# $COMMENT" >> ${LIMITSFILE}
+	fi
+      fi
+    fi
+    if [ "x${CATEGORY}" == "xuser" ] ; then
+      ARCH=`echo $line | $CUT -d":" -f2 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      KERNEL=`echo $line | $CUT -d":" -f3 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      DISTRO=`echo $line | $CUT -d":" -f4 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      TYPE=`echo $line | $CUT -d":" -f5 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      ITEM=`echo $line | $CUT -d":" -f6 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      RECVALUE=`echo "$line" | $CUT -d":" -f7 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+
+      if [ "x$ITEM" == "xmemlock" ]; then
+         if [ "x$LARCH" == "xi686" ]; then # For 32-bit arch, the limit should default to 3GB
+            RECVALUE=3145728
+         fi
+         if [ $RECVALUE -lt $max_memlock ]; then
+            RECVALUE=$max_memlock
+         fi
+      fi
+
+      if [ "x${ARCH}" == "x*" -o "x${ARCH}" == "x${LARCH}" ] ; then
+        if [ "x${KERNEL}" == "x*" -o "x${KERNEL}" == "x${LKERNEL}" ] ; then
+          if [ "x${DISTRO}" == "x*" -o "x${DISTRO}" == "x${LDISTRO}" ] ; then
+
+	    if line=`/bin/grep -w -e "^[[:space:]]*${USER}[[:space:]]*${TYPE}[[:space:]]*${ITEM}" ${LIMITSFILE}`;
+	    then
+              old=`echo $line | awk -F ' ' '{print $4}' | grep -m1 -o "[0-9]*" |grep -m1 -o "[0-9]*"`
+              if [ -z $old ]; then
+                echo -e "Not able to locate value of ${ITEM}" >>  $PRE_PARAM_LOG
+              else
+                if [ $RECVALUE -ge $old ] ;then
+	    	  /bin/grep -w -v -e "^[[:space:]]*${USER}[[:space:]]*${TYPE}[[:space:]]*${ITEM}" ${LIMITSFILE} > ${LIMITSFILE}.tmp &&  /bin/mv ${LIMITSFILE}.tmp ${LIMITSFILE}
+          	  if [ "$?" -ne "0" ]; then
+         	    echo "Failed to move ${LIMITSFILE}.tmp to ${LIMITSFILE}.. .." >> ${PRE_PARAM_LOG}
+                    f_unlock;
+            	    return 1;
+          	  fi
+		  if [ $RECVALUE -eq $old ] ;then
+	            echo $line >> ${LIMITSFILE}
+	            echo $line >>  $PRE_PARAM_LOG
+		    echo "${ITEM} ${TYPE} limit is matching with preinstall config." >>  $PRE_PARAM_LOG
+		  else
+	            echo "$USER   $TYPE   $ITEM    $RECVALUE" >> ${LIMITSFILE}
+	            echo "$USER   $TYPE   $ITEM    $RECVALUE" >>  $PRE_PARAM_LOG
+	            echo -e "Changing  ${USER} ${TYPE} ${ITEM} to match preinstall config" >>  $PRE_PARAM_LOG
+		  fi
+		    	
+                else
+	    	    echo "${ITEM} ${TYPE} limit is higher than preinstall config." >>  $PRE_PARAM_LOG
+		    echo "$line" >>  $PRE_PARAM_LOG
+	        fi
+              fi
+ 	    else
+              echo "$USER   $TYPE   $ITEM    $RECVALUE" >> ${LIMITSFILE}
+	      echo -e "Adding ${USER} ${TYPE} ${ITEM} ${VALUE} ${RECVALUE}" >>  $PRE_PARAM_LOG
+	    fi	
+          fi
+        fi
+      fi
+    fi	
+  done < ${PARAMS}
+
+  #remove empty lines
+  /bin/cat -s ${LIMITSFILE}  > ${LIMITSFILE}.tmp &&  /bin/mv ${LIMITSFILE}.tmp ${LIMITSFILE}
+  if [ "$?" -ne "0" ]; then
+    echo "Failed to move ${LIMITSFILE}.tmp to ${LIMITSFILE}.. .." >> ${PRE_PARAM_LOG}
+    f_unlock;
+    return 1;
+  fi
+  echo "Setting oracle user OS limits as per Oracle recommendations..." >> ${PRE_PARAM_LOG}
+  echo "Altered file ${LIMITSFILE}" >> ${PRE_PARAM_LOG}
+  echo "Original file backed up at ${BACKUP_DIR}" >> ${PRE_PARAM_LOG}
+  f_unlock;
+  return 0;
+}
+
+#Add oracle user. If present ,do nothing but create the mandatory groups
+f_createuser ()
+{
+  f_lock;
+
+  # Obtain the list of groups and the required groupid from PARAMS file
+  GROUPS="/tmp/groups.list"
+  grep "^group:" ${PARAMS} > ${GROUPS}
+
+  while read line; do
+     num_fields=`echo $line | awk -F":" '{print NF}'`
+     
+     if [ $num_fields -ne 7 ]; then
+        echo "Group name not as per format - group:arch:processor:kernel:distribution:gname:gid" >> ${PRE_PARAM_LOG}
+	echo "Not creating - $line" >> ${PRE_PARAM_LOG}
+        continue;
+     fi
+
+     gname=`echo $line | cut -d ":" -f6`
+     gidnum=`echo $line | cut -d":" -f7`
+
+     inval_gname=`echo $gname | sed -e 's/[a-z]*[A-Z]*[0-9]*//g'`
+    
+     if [ ! -z "${inval_gname}" ]; then
+        echo "Group names should have only alphanumeric characters" >> ${PRE_PARAM_LOG}
+        echo "Not creating - $gname" >> ${PRE_PARAM_LOG}
+	continue;
+     fi;
+
+     inval_gidnum=`echo $gidnum | sed -e 's/[0-9]//g'`
+    
+     if [ ! -z "${inval_gidnum}" ]; then
+        echo "Group id should have only numerals." >> ${PRE_PARAM_LOG}
+        echo "Not creating - $gname / $gidnum"  >> ${PRE_PARAM_LOG}
+        continue;
+     fi
+
+     /bin/grep "^${gname}:" /etc/group > /dev/null 2>&1
+     if [ $? -eq 0 ]; then 
+        echo "Group ${gname} - Already exists. Not creating again."  >> ${PRE_PARAM_LOG}
+        continue;
+     fi
+     groupnum=`cat /etc/group | sort -t: -g +2 -3 | grep -v nfsnobody | cut -f3 -d":" | tail -1`
+     if [ "${groupnum}" -ge "${gidnum}" ]; then
+       echo "Group ID $gidnum has been already used or is lower.  So, taking the next available one."
+       gidnum=`expr $groupnum + 1`
+     fi
+     echo "Adding group ${gname} with gid ${gidnum}" >> ${PRE_PARAM_LOG}
+     /usr/sbin/groupadd -g ${gidnum} ${gname}  >> ${PRE_PARAM_LOG} 2>&1
+  done < ${GROUPS}
+  rm -f ${GROUPS}
+
+
+  USERS="/tmp/users.list"
+  grep "^username:" ${PARAMS} > ${USERS}
+
+  while read line; do
+     usname=`echo $line | cut -d ":" -f6`
+     uidnum=`echo $line | cut -d":" -f7`
+     primarygroup=`echo $line | cut -d":" -f8 | cut -d"," -f1`
+     secgroups=`echo $line | cut -d":" -f8` 
+
+     num_fields=`echo $line | awk -F":" '{print NF}'`
+    
+     if [ ${num_fields} -ne 8 ]; then
+        echo "Username not in format - user:arch:processor:kernel:distribution:username:id:primarygroup,secgroups" >> ${PRE_PARAM_LOG}
+	echo "Not creating - $line" >> ${PRE_PARAM_LOG}
+        continue;
+     fi
+
+     inval_usname=`echo $usname | sed -e 's/[a-z]*[A-Z]*[0-9]*//g'`
+     inval_uidnum=`echo $uidnum | sed -e 's/[0-9]//g'`
+
+     if [ ! -z "${inval_usname}" ]; then
+        echo "Username should have only alphanumeric characters" >>  ${PRE_PARAM_LOG} 
+        echo "Not creating - $usname" >> ${PRE_PARAM_LOG}
+        continue;
+     fi
+
+     if [ ! -z "${inval_uidnum}" ]; then
+        echo "User id should have only numerals. Not creating this user" >>  ${PRE_PARAM_LOG}
+	continue;
+     fi;
+
+     /bin/grep "^${usname}:" /etc/passwd > /dev/null 2>&1
+     if [ $? -eq 0 ]; then 
+        echo "User ${usname} - Already exists. Not creating or modifying."  >> ${PRE_PARAM_LOG}
+        continue;
+     fi
+     usernum=`cat /etc/passwd | sort -t: -g +2 -3 | grep -v nfsnobody | cut -f3 -d":" | tail -1`
+     if [ "${usernum}" -ge "${uidnum}" ]; then
+       echo "User ID $uidnum has been already used or is lower.  So, taking the next available one."
+       uidnum=`expr $usernum + 1`
+     fi
+     # Add the user - password is disabled for oracle user.
+     echo "Adding user ${usname} with user id ${uidnum}, initial login group ${primarygroup}, supplementary groups ${secgroups} and  home directory /home/${usname}" >> ${PRE_PARAM_LOG}
+    /usr/sbin/useradd -u ${uidnum} -g ${primarygroup} -G ${secgroups} -d /home/${usname} ${usname} >> ${PRE_PARAM_LOG} 2>&1
+    if [ "$?" -eq "0" ]; then
+      echo "Changing ownership of /home/${usname} to ${usname}:${primarygroup}" >> ${PRE_PARAM_LOG}
+      /bin/chown ${usname}:${primarygroup} /home/${usname}  >> ${PRE_PARAM_LOG} 2>&1
+    else		
+      echo "Failed to create user - ${usname}" >> ${PRE_PARAM_LOG}
+      f_unlock;
+      return 1;
+    fi
+    echo "Please set password for user - ${usname}" >> ${PRE_PARAM_LOG}
+    userinfo=`/usr/bin/id ${usname}`
+    echo "${userinfo}" >> ${PRE_PARAM_LOG}
+  done < ${USERS}
+
+  rm -f ${USERS}
+  f_unlock;
+  return 0;
+}
+
+#Modify PAM settings, If present do nothing.
+f_checkpaminfo()
+{
+  echo "Verifying PAM setting as per Oracle recommendations..." >> ${PRE_PARAM_LOG}
+  PAMCONF="/etc/pam.d/login"
+  PAMCONFBACKUP="/etc/pam.d/login.orabackup"
+  f_lock;
+  if [ ! -f $PAMCONFBACKUP ]; then
+    /bin/cp $PAMCONF $PAMCONFBACKUP ;
+    if [ "$?" -ne "0" ]; then
+      f_unlock;
+      return 1;
+    fi
+  fi
+  /bin/cp ${PAMCONF} ${BACKUP_DIR}
+  if [ "$?" -ne "0" ]; then      
+    f_unlock;
+    return 1;
+  fi
+  /bin/cat $PAMCONF | /bin/grep pam_limits.so > /dev/null 2>&1;
+  if [ $? -ne 0 ]; then
+    echo "session    required     /lib/security/pam_limits.so" >> ${PAMCONF}
+    echo "Altered  PAM settings in /etc/pam.d/login" >> ${PRE_PARAM_LOG}
+    echo "Original file backed up at ${PAMCONFBACKUP}" >> ${PRE_PARAM_LOG}
+  else
+    echo "PAM settings already present as recommended by oracle" >> ${PRE_PARAM_LOG}
+  fi
+  f_unlock;
+  return 0;
+}
+
+f_installsysconfignet ()
+{
+   # Add NOZEROCONF=yes to /etc/sysconfig/network
+   echo "Trying to add NOZEROCONF parameter..." >> ${PRE_PARAM_LOG}
+   if [ ! -f $SYSCONFIGNET ]; then
+      echo "$SYSCONFIGNET not found" >> ${PRE_PARAM_LOG}
+      return 1;
+   fi
+
+   f_lock;
+   if [ ! -f $SYSCONFIGNETBKP ]; then
+      echo "Taking a backup of existing file to $SYSCONFIGNETBKP" >> ${PRE_PARAM_LOG}
+      cp $SYSCONFIGNET $SYSCONFIGNETBKP
+      cp $SYSCONFIGNET ${TEST_LOG}
+   fi
+
+   cat $SYSCONFIGNET | grep "NOZEROCONF=yes" > /dev/null 2>&1
+   if [ $? -eq 0 ]; then
+      grep "^#.*preinstall.*" ${SYSCONFIGNET} > /dev/null 2>&1
+      if [ $? -eq 0 ]; then
+         echo "Parameter added by previous preinstall rpm" >> ${PRE_PARAM_LOG}
+         $SED -i "s/^#.*oracle.*preinstall.* : /# $PREINFILE : /g" $SYSCONFIGNET
+      fi
+      echo "Parameter already present" >> ${PRE_PARAM_LOG}
+      f_unlock;
+      return 0;
+   fi;
+   echo "# ${PREINFILE} : Add NOZEROCONF=yes" >> $SYSCONFIGNET
+   echo "NOZEROCONF=yes" >> $SYSCONFIGNET
+   echo "Successfully added parameter NOZEROCONF to ${SYSCONFIGNET}" >> ${PRE_PARAM_LOG}
+   f_unlock;
+   return 0;
+}
+
+f_unistallsysconfignet ()
+{
+  f_lock;
+  echo "/^# ${PREINFILE}.*/ {
+N
+s/NOZEROCONF=yes//g
+D
+}" > /tmp/sysconfsed
+
+  ${SED} -f /tmp/sysconfsed  $SYSCONFIGNET >  $SYSCONFIGNET.tmp
+  ${SED} '/^\s*$/d' $SYSCONFIGNET.tmp > $SYSCONFIGNET
+  rm -f  /tmp/sysconfsed $SYSCONFIGNET.tmp
+  echo "Successfully removed the added entries"
+  f_unlock;
+}
+
+f_uninstallsysctl ()
+{
+  # Check whether backup file exists for sysctl.conf
+  # if  ${PARAMS} present remove older settings
+
+  # Check if /etc/sysctl.d/99-<any-previous-timestamp>-oracle-*preinstall*.conf is present
+  l_sysctlbackup=`ls /etc/sysctl.d/99-${PREINFILE}-sysctl.conf | awk -F"/" '{print $NF}'`
+  l_lastsaved=`ls -t /etc/sysctl.d/*preinstall* | awk -F"/" '{print $NF}' | head -1`
+
+  f_lock;
+  echo "Saved sysctl file - ${l_sysctlbackup}" >> ${PRE_PARAM_LOG}
+  echo "Latest preinstall sysctl file in /etc/sysctl.d - ${l_lastsaved}" >> ${PRE_PARAM_LOG}
+  if [ "x$l_sysctlbackup" == "x$l_lastsaved" ]; then
+
+  export FINAL_PREINST=1
+  echo "This is the preinstall rpm that was installed recently..." >> ${PRE_PARAM_LOG}
+  if [  -f  "${PARAMS}"  ];then
+    while read line
+    do
+      # skip comments
+      echo $line | /bin/grep -e "^#" > /dev/null
+      if [ $? == 0 ]; then
+        continue;
+      fi
+      CATEGORY=`echo $line | $CUT -d":" -f1 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      TMP=`echo $line | $CUT -d":" -f2 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      if [ -z "${TMP}" ];then
+        continue
+      fi
+      if [ "x${CATEGORY}" == "xkernelcomment" ] ; then
+        TMP=`echo $line | $CUT -d":" -f3 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+        if [ -z "${TMP}" ]; then
+          COMMENT=`echo $line | $CUT -d":" -f2- | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+        else
+          DISTRO=`echo $line | $CUT -d":" -f2 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+          if [ "x${DISTRO}" == "x${LDISTRO}" ] ; then
+            COMMENT=`echo $line | $CUT -d":" -f3- | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+          else
+            ARG=`echo $line | $CUT -d":" -f2 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+            case ${ARG} in
+                "fs.file-max" | "net.core.wmem_max" | "net.ipv4.ip_local_port_range" )
+                  COMMENT=`echo $line | $CUT -d":" -f2- | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+                ;;
+                * )
+                continue
+                ;;
+            esac
+          fi
+       fi
+       if [ ! -z "${COMMENT}" ] ; then
+         /bin/cat ${SYSCTL} | /bin/grep -v "#[[:space:]]*${COMMENT}" > ${SYSCTL}.tmp && /bin/mv ${SYSCTL}.tmp ${SYSCTL}
+         if [ "$?" -ne "0" ]; then
+           echo "Failed to move ${SYSCTL}.tmp to  ${SYSCTL}.. .." >> ${PRE_PARAM_LOG}
+           f_unlock;
+           return 1;
+         fi
+       fi
+      else
+       continue;
+    fi
+    done < ${PARAMS}
+    while read line
+    do
+      # skip comments
+      echo $line | /bin/grep -e "^#" > /dev/null
+      if [ $? == 0 ]; then
+        continue;
+      fi
+      CATEGORY=`echo $line | $CUT -d":" -f1 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      TMP=`echo $line | $CUT -d":" -f2 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      if [ -z "${TMP}" ];then
+        continue
+      fi
+    if [ "x${CATEGORY}" == "xkernel" ] ; then
+      ARCH=`echo $line | $CUT -d":" -f2 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      KERNEL=`echo $line | $CUT -d":" -f3 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      DISTRO=`echo $line | $CUT -d":" -f4 |  $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      PARAM=`echo $line | $CUT -d":" -f5 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      RECVALUE=`echo "$line" | $CUT -d":" -f6 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      if [ "x${ARCH}" == "x*" -o "x${ARCH}" == "x${LARCH}" ] ; then
+        if [ "x${KERNEL}" == "x*" -o "x${KERNEL}" == "x${LKERNEL}" ] ; then
+          if [ "x${DISTRO}" == "x*" -o "x${DISTRO}" == "x${LDISTRO}" ] ; then
+            #special cases for shmmax based on architecture
+            if [ "$PARAM" == "kernel.shmmax" ]; then
+              # Setting shmmax to 4GB on 32 bit machines
+ 	      if [ "x${LARCH}" = "xi686" ]; then
+  	        RECVALUE=4294967295 ;
+	        # Setting shmmax  as per bz7256
+	      elif [ "x${LARCH}" = "xx86_64" ]; then 
+	        RECVALUE=4398046511104 ;
+	      fi
+	    fi
+	    #special cases for shmall based on architecture
+	    if [ "$PARAM" == "kernel.shmall" ]; then
+	      if [ "x${LARCH}" = "xi686" ]; then
+	        RECVALUE=2097152;
+	      elif [ "x${LARCH}" = "xx86_64" ]; then 
+	        RECVALUE=1073741824;
+	      fi
+	    fi
+            grep -w -v "^[[:space:]]*${PARAM}[[:space:]]*=[[:space:]]*$RECVALUE" \
+	    /etc/sysctl.conf > ${SYSCTL}.tmp && /bin/mv ${SYSCTL}.tmp ${SYSCTL}				
+            if [ "$?" -ne "0" ]; then
+	     echo "Failed to move ${SYSCTL}.tmp to  ${SYSCTL}.. .." >> ${PRE_PARAM_LOG}
+             f_unlock;
+	     return 1;
+	    fi
+          fi
+        fi
+      fi
+    fi
+    done < ${PARAMS}
+  fi		
+  fi ### Check to see if this is the latest sysctl in /etc/sysctl.d
+  #remove empty lines
+  /bin/cat -s ${SYSCTL} > ${SYSCTL}.tmp && /bin/mv ${SYSCTL}.tmp ${SYSCTL}
+  if [ "$?" -ne "0" ]; then
+   echo "Failed to move ${SYSCTL}.tmp to  ${SYSCTL}.. .." >> ${PRE_PARAM_LOG}
+   f_unlock
+   return 1;
+  fi
+
+  echo "Erasing /etc/sysctl.d/$l_sysctlbackup" >> ${PRE_PARAM_LOG} 
+  rm -f /etc/sysctl.d/$l_sysctlbackup >> ${PRE_PARAM_LOG}
+  
+  sysctl --system 2>/dev/null 1>&2
+  f_unlock
+}
+
+f_reinstateinitialvalues ()
+{
+  f_lock;
+  ${SED} -e '/^[[:blank:]]*$/d' -e '/^[[:blank:]]*#/d' ${SYSCTL_INIT_BACKUP} | sort  > ${SYSCTL_INIT_BACKUP}.noblank
+  ${SED} -e '/^[[:blank:]]*$/d' -e '/^[[:blank:]]*#/d' ${SYSCTL} | sort  > ${SYSCTL}.noblank
+  diff ${SYSCTL_INIT_BACKUP}.noblank ${SYSCTL}.noblank | grep "^>" | sed -e 's/> //g' > ${SYSCTL}.diff
+  mv ${SYSCTL_INIT_BACKUP} ${SYSCTL}
+  cat ${SYSCTL}.diff >> ${SYSCTL}
+  rm -f ${SYSCTL}.diff ${SYSCTL_INIT_BACKUP}.noblank ${SYSCTL}.noblank
+  f_unlock;
+}
+
+f_uninstallgrub ()
+{
+  # Removing changes from grub.conf
+
+  f_checkgrub;
+  if [ $? -ne 0 ]; then 
+     echo "Unable to get $BOOTFILE to perform uninstall actions" >> ${PRE_PARAM_LOG};
+     return 1;
+  fi;
+
+  #remove boot options. take a backup incase something goes wrong. 
+  f_lock;
+
+  l_grubbackup=`ls ${CHANGE_FILE}-${PREINFILE}.orabackup 2>/dev/null | awk -F"/" '{print $NF}' 2>/dev/null`
+  l_lastsaved=`ls -t ${CHANGE_FILE}*preinstall*.orabackup 2>/dev/null | awk -F"/" '{print $NF}' | head -1 2>/dev/null`
+
+  if [ "x$l_grubbackup" == "x" ]; then
+     echo "Error - Unable to find the previous backup...${CHANGE_FILE}-${PREINFILE}.orabackup.   Exiting..." >> ${PRE_PARAM_LOG}
+     f_unlock;
+     return 1;
+  fi;
+
+
+  # If this timestamp is not the last, nothing to be done
+  # If this is the last saved backup, 
+  # Then, remove the grub entries from CHANGE_FILE
+  # If there is any other oracle-*preinstall*.orabackup - call the most recent oracle-*preinstall*-verify -b to reinstate the boot values
+  
+  if [ "x$l_grubbackup" = "x$l_lastsaved" ]; then
+    # This is the latest change - so remove the entries from CHANGE_FILE
+    echo "Remove entries from ${CHANGE_FILE}" >> ${PRE_PARAM_LOG}
+    while read line
+    do
+      # skip comments
+      echo $line | /bin/grep -e "^#" > /dev/null
+      if [ $? == 0 ]; then
+        continue;
+      fi
+
+      CATEGORY=`echo $line | $CUT -d":" -f1 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+      if [ "x${CATEGORY}" == "xboot" ] ; then
+        ARCH=`echo $line | $CUT -d":" -f2 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+        PROCESSOR=`echo $line | $CUT -d":" -f3 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+        PARAM=`echo $line | $CUT -d":" -f6 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+        RECVALUE=`echo "$line" | $CUT -d":" -f7 | $SED 's/^[ \t]*//' |  $SED 's/[ \t]*$//'`
+        param_str="$PARAM=$RECVALUE"
+	
+        if [ "x${ARCH}" == "x*" -o "x${ARCH}" == "x${LARCH}" ] ; then
+          if [ "x${PROCESSOR}" == "x*" -o "x${PROCESSOR}" == "x${LPROCESSOR}" ] ; then
+  	      $SED -i  "s% $param_str%%g" ${CHANGE_FILE}  > /dev/null 2>&1;
+  	fi
+        fi
+      fi
+    done < ${PARAMS}
+               
+    f_grub2_mkconfig
+    if [ $? -ne 0 ]; then
+       echo "WARNING: Unable to restore boot order. Please check & correct default kernel"  >> ${PRE_PARAM_LOG}
+    fi
+
+  fi # End of check for the last file 
+
+  rm -f ${CHANGE_FILE}-${PREINFILE}.orabackup;  # Remove the current backup.  
+  if [ ${GRUB_VER} -eq 2 ]; then
+     rm -f ${BOOTFILE}-${PREINFILE}.orabackup
+  fi
+  f_unlock;
+}
+
+f_uninstallmodprobe ()
+{
+  f_lock;
+  if [ -f /etc/modprobe.conf.orabackup ];  then
+    /bin/mv /etc/modprobe.conf.orabackup /etc/modprobe.conf > /dev/null 2>&1
+    /sbin/lsmod | $CUT -d" " -f1 | /bin/grep "e1000" > /dev/null 2>&1;
+    if [ $? -eq 0 ]; then
+      /sbin/modprobe -v e1000 2> /dev/null 1>&2
+      if [ "$?" -ne "0" ]; then
+        echo "module parameters reversion failed"
+      fi
+    fi
+  fi
+  f_unlock;
+}
+
+#This function is invoked during rpm uninstall. Roll back all configuration changes here
+f_uninstall ()
+{
+  f_uninstallsysctl;
+  if [ $? -ne 0 ]; then
+     echo "Unable to remove sysctl settings" >> ${PRE_PARAM_LOG}
+     return 1;
+  fi
+
+  f_uninstallgrub;
+  if [ $? -ne 0 ]; then
+     echo "Unable to remove grub/grub2 settings" >> ${PRE_PARAM_LOG}
+     return 1;
+  fi
+
+  f_uninstallmodprobe;
+  if [ $? -ne 0 ]; then
+     echo "Unable to remove modprobe settings" >> ${PRE_PARAM_LOG}
+     return 1;
+  fi
+
+  # Remove the /etc/sysconfig/network entries
+  f_unistallsysconfignet
+   if [ $? -ne 0 ]; then
+       echo "Failed to remove entries from $SYSCONFIGNET"
+       return 1;
+   fi
+
+   # Now, after removing any of current entries - if any previous sysctl is there call its install portion again
+   if [ "x$FINAL_PREINST" == "x1" ]; then
+      l_otherpreinstall=`ls -t /etc/sysctl.d/*preinstall*.conf 2> /dev/null | awk -F "/" '{print $NF}' | grep -v "${PREINFILE}" | head -1`
+      echo "Other installed preinstallation rpm on this box - $l_otherpreinstall" >> ${PRE_PARAM_LOG}
+      if [ "x$l_otherpreinstall" != "x" ]; then
+           l_script=`echo $l_otherpreinstall | sed -e 's%^.*oracle%oracle%g' | sed -e 's%-sysctl.conf%%g'`
+           echo "Calling ${l_script}-verify" >> ${PRE_PARAM_LOG}
+           ${l_script}-verify 
+           return $?;
+      else
+           echo "Reinstating original values " >> ${PRE_PARAM_LOG}
+           f_reinstateinitialvalues;
+      fi;
+   fi
+  return 0;
+}
+
+export PATH=$PATH:/usr/sbin:/sbin:/usr/bin
+USER=`/usr/bin/id -un -n`
+if [ "x${USER}" != "xroot" ]; then
+  echo ""
+  echo "Error: this script needs to be executed as root user"
+  echo "Exiting.."
+  echo ""
+  exit 1;
+fi
+
+f_checkosrelease;
+
+if [ $# -ge 1 ]; then
+  while getopts ":ub" options; do
+    case $options in
+      u ) f_uninstall ; exit $? ;;
+      b ) f_installsysconfignet; res=$?
+          f_checkboot ; exit $? || $res ;;	
+      h ) echo " Usage: ${PREINFILE}-verify [-u]" ; exit 1 ;;
+      * ) echo " Usage: ${PREINFILE}-verify [-u]" ; exit 1 ;;
+    esac
+  done
+fi
+
+mkdir --mode 0700 -p ${TEST_LOG_LOC};
+/usr/bin/test -d ${TEST_LOG_LOC} && /bin/rm -f ${TEST_LOG_LOC}/* 2> /dev/null;
+
+mkdir --mode 0700 -p ${BACKUP_DIR};
+
+f_createuser;
+if [ $? -ne 0 ]; then
+  echo "User creation failed " >> ${PRE_PARAM_LOG}
+  echo "" >> ${PRE_PARAM_LOG}
+else
+  echo "User creation passed " >> ${PRE_PARAM_LOG}
+  echo "" >> ${PRE_PARAM_LOG}
+fi;
+
+f_checkkernel ;
+if [ $? -ne 0 ]; then
+  echo "Verification of certain kernel parameters failed. " >> ${PRE_PARAM_LOG}
+  echo "" >> ${PRE_PARAM_LOG}
+else
+  echo "Verification & setting of kernel parameters passed " >> ${PRE_PARAM_LOG}
+  echo "" >> ${PRE_PARAM_LOG}
+fi;
+
+echo "Setting user limits using $LIMITSFILE" >> ${PRE_PARAM_LOG}
+echo "" >> ${PRE_PARAM_LOG}
+f_checkuserinfo ;
+if [ $? -ne 0 ]; then
+  echo "Verification of certain user limits failed. " >> ${PRE_PARAM_LOG}
+  echo "" >> ${PRE_PARAM_LOG}
+else
+  echo "Verification & setting of user limits passed " >> ${PRE_PARAM_LOG}
+  echo "" >> ${PRE_PARAM_LOG}
+fi;
+
+f_checkboot ;
+if [ $? -ne 0 ]; then
+  echo "Verification of boot parameters failed. " >> ${PRE_PARAM_LOG}
+  echo "" >> ${PRE_PARAM_LOG}
+else
+  echo "Verification & setting of boot parameters passed " >> ${PRE_PARAM_LOG}
+  echo "" >> ${PRE_PARAM_LOG}
+fi;
+
+f_installsysconfignet;
+if [ $? -ne 0 ]; then
+  echo "Setting $SYSCONFIGNET parameters failed. " >> ${PRE_PARAM_LOG}
+  echo "" >> ${PRE_PARAM_LOG}
+else
+  echo "Setting ${SYSCONFIGNET} parameters passed " >> ${PRE_PARAM_LOG}
+  echo "" >> ${PRE_PARAM_LOG}
+fi;
+
+# Disabling THP for note1557478.1, bug17029612
+if test -f /sys/kernel/mm/transparent_hugepage/enabled; then
+   echo never > /sys/kernel/mm/transparent_hugepage/enabled
+   echo "Disabling Transparent Hugepages. " >> ${PRE_PARAM_LOG}
+   echo "Refer Oracle Note:1557478.1" >> ${PRE_PARAM_LOG}
+   echo "" >> ${PRE_PARAM_LOG}
+fi
+if test -f /sys/kernel/mm/transparent_hugepage/defrag; then
+   echo never > /sys/kernel/mm/transparent_hugepage/defrag
+   echo "Disabling defrag. " >> ${PRE_PARAM_LOG}
+   echo "Refer Oracle Note:1557478.1" >> ${PRE_PARAM_LOG}
+   echo "" >> ${PRE_PARAM_LOG}
+fi
+
+echo "Taking a backup of old config files under ${BACKUP_DIR} " >> ${PRE_PARAM_LOG}
+
+/bin/cp ${PRE_PARAM_LOG} ${BACKUP_DIR}
+/bin/rm -f ${OLD_PARAMS}
+
+exit 0

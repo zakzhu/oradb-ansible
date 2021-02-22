@@ -1,0 +1,56 @@
+#!/bin/bash
+#
+# firstboot: Invokes the oracle-database-server-12cR2-preinstall-firstboot checkboot 
+#            function if it hasn't been run before
+#
+# Copyright (C) 2018 Oracle. All rights reserved.
+#
+# chkconfig: 2345 99 95 
+#
+# description:oracle-database-server-12cR2-preinstall-firstboot runs to modify boot parameters
+#
+# Source function library.
+. /etc/init.d/functions
+
+# Check for root
+[ `id -u` = 0 ] || exit 4
+PREINFILE=oracle-database-server-12cR2-preinstall
+FILENAME=/etc/sysconfig/${PREINFILE}/${PREINFILE}.conf;
+PRE_PARAM_LOG=/var/log/${PREINFILE}/results/orakernel.log;
+RUN_PREINSTALL_EXPR=`echo $PREINFILE | sed -e 's/-/_/g' -e 's/\(.*\)/\U\1/'`
+
+case "$1" in
+ start)
+
+	if [ -f "$FILENAME" ] && /bin/grep -q "^RUN_${RUN_PREINSTALL_EXPR}=NO" "$FILENAME"; then
+		action=skip
+	else
+		action=run	
+        fi
+
+	[ $action = skip ] && exit 0
+
+	if [ $action = run ]; then
+		/usr/bin/${PREINFILE}-verify -b 2> /dev/null 1>&2
+		RETVAL="$?"
+	fi
+		        
+	if [ "$RETVAL" -eq 0 ]; then
+	        echo "Altered Boot file. Will be effected on next reboot" >> ${PRE_PARAM_LOG}
+		action "" /bin/true
+        else
+		echo "Boot file modifications failed" >> ${PRE_PARAM_LOG}
+		action "" /bin/false
+        fi
+
+        ;;
+ stop)
+   ;;
+
+ *)
+   echo $"Usage: $0 {start|stop}"
+   RETVAL=1
+esac
+	
+exit $RETVAL
+

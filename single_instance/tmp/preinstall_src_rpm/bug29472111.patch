@@ -1,0 +1,17 @@
+Look for exact match in /etc/group
+Orabug : 29472111
+Signed-off-by : Vasundhara.Venkatasubramanian@oracle.com
+diff -up oracle-database-server-12cR2-preinstall-1.0-4.bug29472111/oracle-database-server-12cR2-preinstall-firstboot.orig oracle-database-server-12cR2-preinstall-1.0-4.bug29472111/oracle-database-server-12cR2-preinstall-firstboot
+diff -up oracle-database-server-12cR2-preinstall-1.0-4.bug29472111/oracle-database-server-12cR2-preinstall.param.orig oracle-database-server-12cR2-preinstall-1.0-4.bug29472111/oracle-database-server-12cR2-preinstall.param
+diff -up oracle-database-server-12cR2-preinstall-1.0-4.bug29472111/oracle-database-server-12cR2-preinstall-verify.orig oracle-database-server-12cR2-preinstall-1.0-4.bug29472111/oracle-database-server-12cR2-preinstall-verify
+--- oracle-database-server-12cR2-preinstall-1.0-4.bug29472111/oracle-database-server-12cR2-preinstall-verify.orig	2019-06-02 19:54:41.662000000 +0530
++++ oracle-database-server-12cR2-preinstall-1.0-4.bug29472111/oracle-database-server-12cR2-preinstall-verify	2019-06-02 19:56:03.361000000 +0530
+@@ -860,7 +860,7 @@ f_createuser ()
+         continue;
+      fi
+ 
+-     /bin/grep "^${gname}" /etc/group > /dev/null 2>&1
++     /bin/grep "^${gname}:" /etc/group > /dev/null 2>&1
+      if [ $? -eq 0 ]; then 
+         echo "Group ${gname} - Already exists. Not creating again."  >> ${PRE_PARAM_LOG}
+         continue;

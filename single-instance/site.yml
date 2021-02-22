@@ -1,7 +1,7 @@
 # @Author: Zak Zhu
 # @Date:   2020-10-05 14:57:45
 # @Last Modified by:   Zak Zhu
-# @Last Modified time: 2021-02-22 13:46:24
+# @Last Modified time: 2021-02-22 16:08:49
 ---
 - name: "{{ playbook_dir | basename }}"
   hosts: localhost
@@ -25,27 +25,9 @@
         - meta: flush_handlers
 
         - import_role:
-            name: pre_roles/boot_param
-          tags:
-            - pr_r_boot_param
-        - meta: flush_handlers
-
-        - import_role:
-            name: pre_roles/swap_file
-          tags:
-            - pr_r_swap_file
-        - meta: flush_handlers
-
-        - import_role:
             name: pre_roles/hostname
           tags:
             - pr_r_hostname
-        - meta: flush_handlers
-
-        - import_role:
-            name: pre_roles/data_volumes
-          tags:
-            - pr_r_data_volumes
         - meta: flush_handlers
 
   tasks:

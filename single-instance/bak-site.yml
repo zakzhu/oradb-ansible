@@ -1,0 +1,139 @@
+# @Author: Zak Zhu
+# @Date:   2020-10-05 14:57:45
+# @Last Modified by:   Zak Zhu
+# @Last Modified time: 2021-02-22 13:20:01
+---
+- name: "{{ playbook_dir | basename }}"
+  hosts: localhost
+  remote_user:
+  gather_facts: yes
+  vars:
+    status: "{{ ansible_local[stats_file_name]['status'] | default('0') }}"
+  force_handlers: no
+  pre_tasks:
+    - name: update ansible facts
+      setup:
+        gather_subset:
+          - "all"
+
+    - when: status == '0'
+      block:
+        - import_role:
+            name: pre_roles/common
+          tags:
+            - pr_r_common
+        - meta: flush_handlers
+
+        - import_role:
+            name: pre_roles/boot_param
+          tags:
+            - pr_r_boot_param
+        - meta: flush_handlers
+
+        - import_role:
+            name: pre_roles/swap_file
+          tags:
+            - pr_r_swap_file
+        - meta: flush_handlers
+
+        - import_role:
+            name: pre_roles/hostname
+          tags:
+            - pr_r_hostname
+        - meta: flush_handlers
+
+        - import_role:
+            name: pre_roles/data_volumes
+          tags:
+            - pr_r_data_volumes
+        - meta: flush_handlers
+
+        - import_role:
+            name: pre_roles/security
+          tags:
+            - pr_r_security
+        - meta: flush_handlers
+
+        - import_role:
+            name: pre_roles/install_check
+          tags:
+            - pr_r_install_check
+        - meta: flush_handlers
+
+  tasks:
+    - when: status == '0'
+      block:
+        - import_role:
+            name: users
+          tags:
+            - r_users
+        - meta: flush_handlers
+
+        - import_role:
+            name: resource_limits
+          tags:
+            - r_resource_limits
+        - meta: flush_handlers
+
+        - import_role:
+            name: kernel_param
+          tags:
+            - r_kernel_param
+        - meta: flush_handlers
+
+        - import_role:
+            name: mount_points
+          tags:
+            - r_mount_points
+        - meta: flush_handlers
+
+        - import_role:
+            name: oracle_env
+          tags:
+            - r_oracle_env
+        - meta: flush_handlers
+
+        - import_role:
+            name: oracle_dirs
+          tags:
+            - r_oracle_dirs
+        - meta: flush_handlers
+
+        - import_role:
+            name: pkg_reqs
+          tags:
+            - r_pkg_reqs
+        - meta: flush_handlers
+
+        - import_role:
+            name: get_software
+          tags:
+            - r_get_software
+        - meta: flush_handlers
+
+        - import_role:
+            name: response_files
+          tags:
+            - r_response_files
+        - meta: flush_handlers
+
+        - import_role:
+            name: common
+          tags:
+            - r_common
+        - meta: flush_handlers
+
+        - import_role:
+            name: oracle_login
+          tags:
+            - r_oracle_login
+        - meta: flush_handlers
+
+  post_tasks:
+    - when: status == '0'
+      block:
+        - import_role:
+            name: post_roles/common
+          tags:
+            - po_r_common
+        - meta: flush_handlers

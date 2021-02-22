@@ -1,6 +1,0 @@
----
-# defaults file for install_check
-
-# FROM TASK: <pr_r_install_check_t_require_min_ram> determine whether the system memory is greater than 1GB
-mem_total_mb: "{{ ansible_facts['memtotal_mb'] }}"
-_1_GB_TO_MB: 1024

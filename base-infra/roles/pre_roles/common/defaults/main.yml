@@ -8,6 +8,7 @@ supported_os:
   server:
     - CentOS-7
     - CentOS-8
+    - OracleLinux-7
 
 # FROM TASK: <pr_r_common_t_common> set start stats
 date_cmd: "date +'%Y-%m-%d %H:%M:%S'"

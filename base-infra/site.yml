@@ -1,7 +1,7 @@
 # @Author: Zak Zhu
 # @Date:   2021-02-23 16:13:34
 # @Last Modified by:   Zak Zhu
-# @Last Modified time: 2021-02-23 16:13:36
+# @Last Modified time: 2021-02-23 17:04:50
 ---
 - name: "{{ playbook_dir | basename }}"
   hosts: localhost
@@ -27,12 +27,6 @@
   tasks:
     - when: status == '0'
       block:
-        - import_role:
-            name: grub
-          tags:
-            - r_grub
-        - meta: flush_handlers
-
         - import_role:
             name: hostname
           tags:

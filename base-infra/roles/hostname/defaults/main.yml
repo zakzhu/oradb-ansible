@@ -2,4 +2,4 @@
 # defaults file for hostname
 
 # FROM TASK: <pr_r_hostname_t_common> set system's hostname
-hostname: oracle1.example.com
+hostname: ocp1.oracle.linux

@@ -11,4 +11,7 @@ grub_cmd:
   - spectre_v2=off
   - nopti
   - crashkernel=auto
-  -
+  - net.ifnames=0
+  - biosdevname=0
+  - numa=off
+  - transparent_hugepage=madvise

@@ -24,9 +24,27 @@
     - when: status == '0'
       block:
         - import_role:
-            name: common
+            name: grub
           tags:
-            - r_common
+            - r_grub
+        - meta: flush_handlers
+
+        - import_role:
+            name: hostname
+          tags:
+            - r_hostname
+        - meta: flush_handlers
+
+        - import_role:
+            name: swap_file
+          tags:
+            - r_swap_file
+        - meta: flush_handlers
+
+        - import_role:
+            name: data_volumes
+          tags:
+            - r_data_volumes
         - meta: flush_handlers
 
   post_tasks:

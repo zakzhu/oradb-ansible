@@ -11,3 +11,4 @@ grub_cmd:
   - spectre_v2=off
   - nopti
   - crashkernel=auto
+  -

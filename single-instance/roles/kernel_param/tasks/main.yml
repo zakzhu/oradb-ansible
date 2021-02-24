@@ -1,6 +1,0 @@
----
-# tasks file for kernel_param
-
-- import_tasks: common.yml
-  tags:
-    - r_kernel_param_t_common

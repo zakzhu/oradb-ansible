@@ -2,4 +2,4 @@
 - hosts: localhost
   remote_user: root
   roles:
-    - pkg_reqs
+    - oracle_preinst

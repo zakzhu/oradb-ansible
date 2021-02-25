@@ -1,7 +1,7 @@
 # @Author: Zak Zhu
 # @Date:   2020-10-05 14:57:45
 # @Last Modified by:   Zak Zhu
-# @Last Modified time: 2021-02-25 10:02:32
+# @Last Modified time: 2021-02-25 10:21:22
 ---
 - name: "{{ playbook_dir | basename }}"
   hosts: localhost
@@ -52,9 +52,9 @@
         - meta: flush_handlers
 
         - import_role:
-            name: pkg_reqs
+            name: oracle_preinst
           tags:
-            - r_pkg_reqs
+            - r_oracle_preinst
         - meta: flush_handlers
 
         - import_role:

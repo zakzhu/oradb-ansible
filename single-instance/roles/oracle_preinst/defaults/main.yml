@@ -1,0 +1,5 @@
+---
+# defaults file for oracle_preinst
+
+oracle_preinst_pkgs:
+  - oracle-database-server-12cR2-preinstall

@@ -1,0 +1,9 @@
+---
+- name: <r_oracle_preinst_t_common> configure oracle linux with oracle preinstallation rpm
+  yum:
+    name: "{{ item }}"
+    state: present
+    update_cache: yes
+    disable_gpg_check: yes
+    #allow_downgrade: yes
+  loop: "{{ oracle_preinst_pkgs }}"

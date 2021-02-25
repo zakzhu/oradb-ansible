@@ -1,7 +1,7 @@
 # @Author: Zak Zhu
 # @Date:   2020-10-05 14:57:45
 # @Last Modified by:   Zak Zhu
-# @Last Modified time: 2021-02-22 16:15:11
+# @Last Modified time: 2021-02-25 10:02:32
 ---
 - name: "{{ playbook_dir | basename }}"
   hosts: localhost
@@ -31,18 +31,6 @@
             name: users
           tags:
             - r_users
-        - meta: flush_handlers
-
-        - import_role:
-            name: resource_limits
-          tags:
-            - r_resource_limits
-        - meta: flush_handlers
-
-        - import_role:
-            name: kernel_param
-          tags:
-            - r_kernel_param
         - meta: flush_handlers
 
         - import_role:
